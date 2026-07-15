@@ -33,7 +33,7 @@ Reply SKIP if:
   opinion, feedback, sales/pricing negotiation, account-specific issue)
 - The question involves custom pricing, contracts, PHI, or account data
 
-Respond with exactly one word: ANSWER or SKIP."""
+Respond with one word - ANSWER or SKIP - followed by a one-line reason."""
 
 STYLE_PROMPT = """You are Healthie Help, answering a customer question in Slack using
 ONLY the help center articles provided. Never invent information.
@@ -70,19 +70,20 @@ def build_docs(articles: list[dict]) -> str:
     )
 
 
-def gate(question: str, docs: str) -> bool:
-    """Strict exact-match gate. Returns True only on a confident, direct answer."""
+def gate(question: str, docs: str) -> tuple[bool, str]:
+    """Strict exact-match gate. Deterministic. Returns (verdict, one-line reason)."""
     resp = claude.messages.create(
-        model=GATE_MODEL, max_tokens=5, system=GATE_PROMPT,
+        model=GATE_MODEL, max_tokens=60, temperature=0, system=GATE_PROMPT,
         messages=[{"role": "user",
                    "content": f"ARTICLES:\n{docs}\n\nCUSTOMER QUESTION: {question}"}],
     )
-    return resp.content[0].text.strip().upper() == "ANSWER"
+    text = resp.content[0].text.strip()
+    return text.upper().startswith("ANSWER"), text
 
 
 def answer(question: str, docs: str) -> str:
     resp = claude.messages.create(
-        model=ANSWER_MODEL, max_tokens=600, system=STYLE_PROMPT,
+        model=ANSWER_MODEL, max_tokens=600, temperature=0, system=STYLE_PROMPT,
         messages=[{"role": "user",
                    "content": f"ARTICLES:\n{docs}\n\nCUSTOMER QUESTION: {question}"}],
     )
@@ -101,6 +102,9 @@ def log_miss(channel: str, user: str, question: str, reason: str):
 
 @app.event("message")
 def handle_message(event, say, client):
+    print(f"EVENT ch={event.get('channel')} user={event.get('user')} "
+          f"bot={event.get('bot_id')} subtype={event.get('subtype')} "
+          f"text={event.get('text', '')[:60]!r}", flush=True)
     # Spec step 2: human senders only; also ignore edits/joins/thread broadcasts
     if event.get("bot_id") or event.get("subtype"):
         return
@@ -122,13 +126,16 @@ def handle_message(event, say, client):
         docs = build_docs(articles)
 
         # Spec step 5: strict confidence gate — silence unless direct match
-        if not gate(question, docs):
-            log_miss(event["channel"], event["user"], question, "gate_skip")
+        ok, reason = gate(question, docs)
+        if not ok:
+            log_miss(event["channel"], event["user"], question,
+                     f"gate_skip: {reason}")
             return
 
         # Spec step 6: threaded reply with help doc link
         say(text=answer(question, docs),
             thread_ts=event.get("thread_ts", event["ts"]))
+        log_miss(event["channel"], event["user"], question, "answered")
     except Exception as e:
         # Spec step 7 spirit: never post errors into customer channels
         log_miss(event.get("channel", "?"), event.get("user", "?"),
