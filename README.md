@@ -22,7 +22,13 @@ Setup (one time):
 3. Share the sheet with the service account's client_email as Editor
 
 Override the target sheet with MISS_LOG_SHEET_ID. If the Sheet is unreachable,
-rows fall back to a local unanswered_questions.csv so nothing is lost.
+the row is printed to the service logs instead.
+
+## Behavior
+The bot silently skips messages it cannot answer from the help center.
+Exception: if a message starts with @healthie-help (or a direct bot mention),
+the bot always replies in-thread — with the answer if it has one, otherwise
+with a polite note pointing to the help center.
 
 ## Deploy (Railway / Render / Fly)
 1. Push this folder to a GitHub repo
