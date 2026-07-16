@@ -46,23 +46,36 @@ ERROR_REPLY = (
 MUTED_REPLY = (
     "Understood. I will stop answering automatically in this channel.\n"
     "Mention me with a question any time and I will still respond. "
-    "Say \"@healthie-help unmute\" to turn automatic answers back on."
+    "Say \"{bot} unmute\" to turn automatic answers back on."
 )
 UNMUTED_REPLY = (
     "Automatic answers are back on for this channel.\n"
-    "Say \"@healthie-help mute\" any time to switch me to mention-only."
+    "Say \"{bot} mute\" any time to switch me to mention-only."
 )
 STATUS_MUTED_REPLY = (
     "This channel is set to mention-only. I answer here only when mentioned.\n"
-    "Say \"@healthie-help unmute\" to turn automatic answers back on."
+    "Say \"{bot} unmute\" to turn automatic answers back on."
 )
 STATUS_AUTO_REPLY = (
     "Automatic answers are on for this channel.\n"
-    "Say \"@healthie-help mute\" to switch me to mention-only."
+    "Say \"{bot} mute\" to switch me to mention-only."
 )
 
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 claude = Anthropic()
+
+_bot_mention = None
+
+
+def bot_mention() -> str:
+    """The bot's real Slack mention (renders as its display name), cached."""
+    global _bot_mention
+    if _bot_mention is None:
+        try:
+            _bot_mention = f"<@{app.client.auth_test()['user_id']}>"
+        except Exception:
+            _bot_mention = "@Healthie Help Bot"
+    return _bot_mention
 
 QUERY_PROMPT = """You turn a customer support message into search queries for a
 help center search engine that matches keywords literally (filler words hurt it).
@@ -277,16 +290,16 @@ def handle_message(event, say, client):
         command = question.lower().rstrip(".!")
         if command in MUTE_COMMANDS:
             set_channel_mode(event["channel"], True, event["user"])
-            say(text=MUTED_REPLY, thread_ts=reply_ts)
+            say(text=MUTED_REPLY.format(bot=bot_mention()), thread_ts=reply_ts)
             return
         if command in UNMUTE_COMMANDS:
             set_channel_mode(event["channel"], False, event["user"])
-            say(text=UNMUTED_REPLY, thread_ts=reply_ts)
+            say(text=UNMUTED_REPLY.format(bot=bot_mention()), thread_ts=reply_ts)
             return
         if command in STATUS_COMMANDS:
             muted = event["channel"] in muted_channels
-            say(text=STATUS_MUTED_REPLY if muted else STATUS_AUTO_REPLY,
-                thread_ts=reply_ts)
+            template = STATUS_MUTED_REPLY if muted else STATUS_AUTO_REPLY
+            say(text=template.format(bot=bot_mention()), thread_ts=reply_ts)
             return
 
     # Mention-only mode: stay silent for unmentioned messages in muted channels
