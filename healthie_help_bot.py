@@ -1,8 +1,10 @@
 import csv
+import json
 import os
 import re
 from datetime import datetime, timezone
 
+import gspread
 import requests
 from bs4 import BeautifulSoup
 from anthropic import Anthropic
@@ -16,7 +18,11 @@ GATE_MODEL = "claude-haiku-4-5-20251001"   # cheap yes/no gate
 WATCHED_CHANNELS = set(
     c for c in os.environ.get("WATCHED_CHANNELS", "").split(",") if c
 )  # empty = all channels the bot is in
-MISS_LOG = "unanswered_questions.csv"
+MISS_LOG_SHEET_ID = os.environ.get(
+    "MISS_LOG_SHEET_ID", "1vcNM8R0E0mfoxhfjRv9PkA-kRkutUOiKYP8vx6GQ6VA"
+)
+MISS_LOG_FALLBACK = "unanswered_questions.csv"  # used only if the Sheet is unreachable
+MISS_LOG_HEADER = ["timestamp_utc", "channel", "user", "question", "reason"]
 
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 claude = Anthropic()
@@ -90,14 +96,36 @@ def answer(question: str, docs: str) -> str:
     return resp.content[0].text
 
 
+_worksheet = None
+
+
+def _sheet():
+    """Lazy-init the Google Sheet worksheet; adds the header row on first use."""
+    global _worksheet
+    if _worksheet is None:
+        creds = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
+        ws = gspread.service_account_from_dict(creds).open_by_key(
+            MISS_LOG_SHEET_ID).sheet1
+        if not ws.get_values("A1:E1"):
+            ws.append_row(MISS_LOG_HEADER, value_input_option="RAW")
+        _worksheet = ws
+    return _worksheet
+
+
 def log_miss(channel: str, user: str, question: str, reason: str):
-    new = not os.path.exists(MISS_LOG)
-    with open(MISS_LOG, "a", newline="") as f:
-        w = csv.writer(f)
-        if new:
-            w.writerow(["timestamp_utc", "channel", "user", "question", "reason"])
-        w.writerow([datetime.now(timezone.utc).isoformat(), channel, user,
-                    question, reason])
+    row = [datetime.now(timezone.utc).isoformat(), channel, user, question, reason]
+    try:
+        _sheet().append_row(row, value_input_option="RAW")
+    except Exception as e:
+        # never lose a miss: fall back to local CSV if the Sheet is unreachable
+        print(f"sheet log failed ({type(e).__name__}: {e}); using CSV fallback",
+              flush=True)
+        new = not os.path.exists(MISS_LOG_FALLBACK)
+        with open(MISS_LOG_FALLBACK, "a", newline="") as f:
+            w = csv.writer(f)
+            if new:
+                w.writerow(MISS_LOG_HEADER)
+            w.writerow(row)
 
 
 @app.event("message")
