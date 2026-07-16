@@ -2,3 +2,4 @@ slack-bolt>=1.20
 anthropic>=0.40
 beautifulsoup4>=4.12
 requests>=2.31
+gspread>=6.0
