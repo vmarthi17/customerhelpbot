@@ -39,10 +39,6 @@ NO_ANSWER_REPLY = (
     "You can also browse the help center here:\n"
     "<https://help.gethealthie.com|Healthie Help Center>"
 )
-ASK_A_QUESTION_REPLY = (
-    "Hello. Ask me a question about using Healthie and I will answer it "
-    "from the help center if I can."
-)
 ERROR_REPLY = (
     "I ran into a technical issue while looking that up. "
     "Please try again in a few minutes, or the team can follow up here."
@@ -298,9 +294,7 @@ def handle_message(event, say, client):
         return
 
     if len(question) < 10:          # too short to be a real question
-        if mentioned:
-            say(text=ASK_A_QUESTION_REPLY, thread_ts=reply_ts)
-        return
+        return                      # silent even when mentioned — ask a question
 
     try:
         urls = search_articles(question)

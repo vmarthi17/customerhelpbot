@@ -20,10 +20,11 @@ the article text, and a strict relevance check runs before every reply.
 - **Automatic:** any human message of 10+ characters in a channel the bot is
   in. The bot searches the Help Center, checks relevance, and replies only
   if an article directly answers the question. Otherwise it stays silent.
-- **Direct mention:** start a message with `@healthie-help` and the bot
-  ALWAYS replies — with the answer if it has one, or a polite "I don't have
-  an article for that" pointing to the Help Center. Mentions work even in
-  muted channels.
+- **Direct mention:** start a message with `@healthie-help` followed by an
+  actual question and the bot always replies — with the answer if it has
+  one, or a polite "I don't have an article for that" pointing to the Help
+  Center. Mentions work even in muted channels. A bare mention (or mention
+  with no real question) gets no response.
 - It ignores messages from other bots, message edits, join/leave events,
   and channels listed in the `IGNORED_CHANNELS` env var.
 
