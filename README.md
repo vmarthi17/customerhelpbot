@@ -1,4 +1,4 @@
-# Healthie Help Bot
+﻿# Healthie Help Bot
 
 A Slack bot that answers customer questions using only content from the
 Healthie Help Center (help.gethealthie.com). If it cannot find a direct
@@ -12,7 +12,7 @@ answer in the help docs, it stays silent rather than guessing.
 The bot watches the Slack channels it has been invited to. When someone asks
 a question it can confidently answer from the Help Center, it replies in a
 thread with a short, plain-text answer and links to the supporting help
-article(s) — usually 1 link, up to 3 when several articles are each highly
+article(s) â€” usually 1 link, up to 3 when several articles are each highly
 relevant. It never invents information: answers are written strictly from
 the article text, and a strict relevance check runs before every reply.
 
@@ -20,8 +20,8 @@ the article text, and a strict relevance check runs before every reply.
 - **Automatic:** any human message of 10+ characters in a channel the bot is
   in. The bot searches the Help Center, checks relevance, and replies only
   if an article directly answers the question. Otherwise it stays silent.
-- **Direct mention:** start a message with `@healthie-help` followed by an
-  actual question and the bot always replies — with the answer if it has
+- **Direct mention:** start a message with `@Healthie Help Bot` followed by an
+  actual question and the bot always replies â€” with the answer if it has
   one, or a polite "I don't have an article for that" pointing to the Help
   Center. Mentions work even in muted channels. A bare mention (or mention
   with no real question) gets no response.
@@ -32,7 +32,7 @@ the article text, and a strict relevance check runs before every reply.
 Every channel has its own mode, toggled by anyone in the channel:
 - **Auto (default):** the bot may answer any qualifying message.
 - **Mention-only (muted):** the bot is silent unless explicitly
-  `@healthie-help` mentioned. Muting one channel never affects another.
+  `@Healthie Help Bot` mentioned. Muting one channel never affects another.
 
 ### 4. What it has access to
 - **Slack:** only channels it has been invited to (bot scopes: `chat:write`,
@@ -59,12 +59,12 @@ Every channel has its own mode, toggled by anyone in the channel:
   into a technical issue" note instead of an error trace.
 - **Scoped credentials:** the Slack app uses Socket Mode (no public inbound
   endpoint), the Google service account can only edit the one log sheet, and
-  all secrets live in Railway environment variables — none are in this repo.
+  all secrets live in Railway environment variables â€” none are in this repo.
 
 ### 6. How to mute it (per channel)
 In the channel, type:
 
-    @healthie-help mute
+    @Healthie Help Bot mute
 
 (`pause`, `stop`, and `quiet` also work.) The bot confirms in-thread and
 stops auto-answering that channel. Mentions still get responses.
@@ -72,16 +72,16 @@ stops auto-answering that channel. Mentions still get responses.
 ### 7. How to unmute it (per channel)
 In the channel, type:
 
-    @healthie-help unmute
+    @Healthie Help Bot unmute
 
 (`resume` and `start` also work.) The bot confirms and resumes auto answers.
-`@healthie-help status` shows the channel's current mode at any time.
+`@Healthie Help Bot status` shows the channel's current mode at any time.
 
 ### 8. Where data is recorded (for later review)
 Everything lands in one Google Sheet:
 https://docs.google.com/spreadsheets/d/1vcNM8R0E0mfoxhfjRv9PkA-kRkutUOiKYP8vx6GQ6VA/edit
 
-- **Tab 1 (miss log):** one row per processed question — timestamp, channel,
+- **Tab 1 (miss log):** one row per processed question â€” timestamp, channel,
   user, question text, and outcome (`answered`, `gate_skip` with the reason,
   `no_search_results`, or `error:<type>`). Gate skips are the content
   backlog: questions customers asked that the Help Center can't answer yet.
@@ -95,8 +95,8 @@ https://docs.google.com/spreadsheets/d/1vcNM8R0E0mfoxhfjRv9PkA-kRkutUOiKYP8vx6GQ
 
 ### 1. Where it lives in GitHub
 https://github.com/vmarthi17/customerhelpbot (public repo)
-- `healthie_help_bot.py` — the entire bot (~300 lines)
-- `Dockerfile` / `requirements.txt` — deployment
+- `healthie_help_bot.py` â€” the entire bot (~300 lines)
+- `Dockerfile` / `requirements.txt` â€” deployment
 - Changes go through pull requests to `main`; merging to `main` triggers a
   redeploy automatically.
 
@@ -119,12 +119,12 @@ service's Variables tab:
 The bot authenticates with the `ANTHROPIC_API_KEY` set in Railway (manage or
 rotate it in the Anthropic Console; it appears nowhere in this repo). Two
 models per answered question:
-- **claude-haiku-4-5** ($1/$5 per MTok) — turns the question into search
+- **claude-haiku-4-5** ($1/$5 per MTok) â€” turns the question into search
   keywords, and runs the strict relevance gate
-- **claude-sonnet-4-6** ($3/$15 per MTok) — writes the customer-facing answer
+- **claude-sonnet-4-6** ($3/$15 per MTok) â€” writes the customer-facing answer
 
-Typical cost: ~$0.004 per skipped question, ~$0.02 per answered question —
-roughly $8–20/month at 1,000 processed messages.
+Typical cost: ~$0.004 per skipped question, ~$0.02 per answered question â€”
+roughly $8â€“20/month at 1,000 processed messages.
 
 ---
 
@@ -141,7 +141,7 @@ Things to address before scaling this beyond a pilot:
 2. **Single instance, no queue.** Socket Mode + one Railway container means
    one process handles everything sequentially-ish. A burst of messages
    means slow replies; a crash mid-question drops it (Slack does retry
-   deliveries, but there's no dedup — a slow response can also cause
+   deliveries, but there's no dedup â€” a slow response can also cause
    double-processing). Running two replicas would double-answer every
    question, so this cannot be horizontally scaled as-is.
 3. **Help Center scraping is fragile.** Article search and content come from
@@ -155,7 +155,7 @@ Things to address before scaling this beyond a pilot:
    move logging to a real datastore and keep the Sheet as a synced view.
 5. **Rate limits.** Anthropic API and Slack `chat.postMessage` both have
    rate limits. There's no client-side rate limiting or backoff beyond SDK
-   defaults, so a message flood degrades into errors (which fail silent —
+   defaults, so a message flood degrades into errors (which fail silent â€”
    see the miss log for `error:` rows).
 6. **Anyone can mute/unmute.** Any channel member can toggle the bot. Low
    stakes internally; at customer scale you'd want the commands restricted
@@ -183,7 +183,7 @@ Things to address before scaling this beyond a pilot:
     python healthie_help_bot.py
 
 ## Google Sheets setup (one time, already done for prod)
-1. Google Cloud console → create a service account, enable the Google
+1. Google Cloud console â†’ create a service account, enable the Google
    Sheets API
 2. Create a JSON key; put its contents in `GOOGLE_SERVICE_ACCOUNT_JSON`
 3. Share the Sheet with the service account's `client_email` as Editor
