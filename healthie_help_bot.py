@@ -36,7 +36,8 @@ MUTE_COMMANDS = {"mute", "pause", "stop", "quiet"}
 UNMUTE_COMMANDS = {"unmute", "resume", "start"}
 STATUS_COMMANDS = {"status", "mode"}
 
-MENTION_RE = re.compile(r"^(<@[A-Z0-9]+>|@healthie-help)\s*")
+# Leading mention; group 2 is the mentioned user's ID (None for the literal)
+MENTION_RE = re.compile(r"^(<@([A-Z0-9]+)>|@healthie-help)\s*")
 
 NO_ANSWER_REPLY = (
     "I do not have a help center article that directly answers this, "
@@ -69,18 +70,24 @@ STATUS_AUTO_REPLY = (
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 claude = Anthropic()
 
-_bot_mention = None
+_bot_user_id = None
+
+
+def bot_user_id() -> str:
+    """The bot's own Slack user ID, cached; empty string if the lookup fails."""
+    global _bot_user_id
+    if _bot_user_id is None:
+        try:
+            _bot_user_id = app.client.auth_test()["user_id"]
+        except Exception:
+            return ""
+    return _bot_user_id
 
 
 def bot_mention() -> str:
-    """The bot's real Slack mention (renders as its display name), cached."""
-    global _bot_mention
-    if _bot_mention is None:
-        try:
-            _bot_mention = f"<@{app.client.auth_test()['user_id']}>"
-        except Exception:
-            _bot_mention = "@Healthie Help Bot"
-    return _bot_mention
+    """The bot's real Slack mention (renders as its display name)."""
+    uid = bot_user_id()
+    return f"<@{uid}>" if uid else "@Healthie Help Bot"
 
 
 _channel_names: dict[str, str] = {}
@@ -376,8 +383,13 @@ def handle_message(event, say, client):
     # Spec step 3: full text is the question; strip optional prefix/mention.
     # A leading @healthie-help / bot mention means the user addressed us
     # directly, so we always reply — even if only to say we have nothing.
+    # A message that opens by tagging some OTHER user is addressed to a
+    # person, not to us: stay silent entirely.
     raw = event.get("text", "")
-    mentioned = bool(MENTION_RE.match(raw))
+    m = MENTION_RE.match(raw)
+    if m and m.group(2) and bot_user_id() and m.group(2) != bot_user_id():
+        return
+    mentioned = bool(m)
     question = MENTION_RE.sub("", raw).strip()
     reply_ts = event.get("thread_ts", event["ts"])
 
