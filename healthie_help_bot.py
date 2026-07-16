@@ -45,6 +45,13 @@ ERROR_REPLY = (
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 claude = Anthropic()
 
+QUERY_PROMPT = """You turn a customer support message into search queries for a
+help center search engine that matches keywords literally (filler words hurt it).
+
+Extract 1-3 short queries, 1-4 words each, focused on the product feature or
+noun being asked about. Drop greetings, politeness, and filler.
+Reply with one query per line and nothing else."""
+
 GATE_PROMPT = """You are a strict relevance gate for a customer support bot.
 Decide whether the help center articles below DIRECTLY and COMPLETELY answer the
 customer's question.
@@ -71,11 +78,33 @@ Style rules:
 - End with the help doc link on its own line, formatted as <URL|Article Title>."""
 
 
+def extract_queries(question: str) -> list[str]:
+    """Turn a conversational message into 1-3 keyword queries the help center
+    search can actually match ("can you tell me about e-labs?" -> "e-labs")."""
+    resp = claude.messages.create(
+        model=GATE_MODEL, max_tokens=50, temperature=0, system=QUERY_PROMPT,
+        messages=[{"role": "user", "content": question}],
+    )
+    lines = [l.strip() for l in resp.content[0].text.splitlines() if l.strip()]
+    return lines[:3] or [question]
+
+
 def search_help_center(query: str) -> list[str]:
     r = requests.get(f"{HELP_BASE}/search", params={"query": query},
                      headers={"User-Agent": "HealthieHelpBot/2.0"}, timeout=10)
     slugs = list(dict.fromkeys(re.findall(r'href="/article/([^"]+)"', r.text)))
-    return [f"{HELP_BASE}/article/{s}" for s in slugs[:MAX_ARTICLES]]
+    return [f"{HELP_BASE}/article/{s}" for s in slugs]
+
+
+def search_articles(question: str) -> list[str]:
+    """Search once per extracted keyword query; merge, dedupe, cap.
+    Falls back to the raw message if the keyword queries find nothing."""
+    urls = []
+    for q in extract_queries(question):
+        urls.extend(search_help_center(q))
+    if not urls:
+        urls = search_help_center(question)
+    return list(dict.fromkeys(urls))[:MAX_ARTICLES]
 
 
 def fetch_article(url: str) -> dict:
@@ -165,7 +194,7 @@ def handle_message(event, say, client):
         return
 
     try:
-        urls = search_help_center(question)
+        urls = search_articles(question)
         articles = [a for a in (fetch_article(u) for u in urls) if a["text"]]
 
         # Spec step 5: strict confidence gate — silence unless direct match,
