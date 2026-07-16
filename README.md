@@ -31,6 +31,16 @@ Exception: if a message starts with @healthie-help (or a direct bot mention),
 the bot always replies in-thread — with the answer if it has one, otherwise
 with a polite note pointing to the help center.
 
+## Per-channel mute (mention-only mode)
+Anyone in a channel can toggle how the bot behaves there:
+- "@healthie-help mute" (or pause/stop/quiet) — stop automatic answers in
+  this channel; the bot still replies when mentioned
+- "@healthie-help unmute" (or resume/start) — turn automatic answers back on
+- "@healthie-help status" — show the channel's current mode
+
+Modes are per channel and persist across restarts in the channel_modes tab
+of the miss-log Google Sheet (channel, mode, updated_utc, updated_by).
+
 ## Deploy (Railway / Render / Fly)
 1. Push this folder to a GitHub repo
 2. New project -> deploy from repo (Dockerfile auto-detected)
