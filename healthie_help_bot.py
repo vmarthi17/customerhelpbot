@@ -1,4 +1,3 @@
-import csv
 import json
 import os
 import re
@@ -21,8 +20,24 @@ WATCHED_CHANNELS = set(
 MISS_LOG_SHEET_ID = os.environ.get(
     "MISS_LOG_SHEET_ID", "1vcNM8R0E0mfoxhfjRv9PkA-kRkutUOiKYP8vx6GQ6VA"
 )
-MISS_LOG_FALLBACK = "unanswered_questions.csv"  # used only if the Sheet is unreachable
 MISS_LOG_HEADER = ["timestamp_utc", "channel", "user", "question", "reason"]
+
+MENTION_RE = re.compile(r"^(<@[A-Z0-9]+>|@healthie-help)\s*")
+
+NO_ANSWER_REPLY = (
+    "I do not have a help center article that directly answers this, "
+    "so I will leave it for the team rather than guess.\n"
+    "You can also browse the help center here:\n"
+    "<https://help.gethealthie.com|Healthie Help Center>"
+)
+ASK_A_QUESTION_REPLY = (
+    "Hello. Ask me a question about using Healthie and I will answer it "
+    "from the help center if I can."
+)
+ERROR_REPLY = (
+    "I ran into a technical issue while looking that up. "
+    "Please try again in a few minutes, or the team can follow up here."
+)
 
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 claude = Anthropic()
@@ -117,15 +132,8 @@ def log_miss(channel: str, user: str, question: str, reason: str):
     try:
         _sheet().append_row(row, value_input_option="RAW")
     except Exception as e:
-        # never lose a miss: fall back to local CSV if the Sheet is unreachable
-        print(f"sheet log failed ({type(e).__name__}: {e}); using CSV fallback",
+        print(f"sheet log failed ({type(e).__name__}: {e}); dropped row: {row}",
               flush=True)
-        new = not os.path.exists(MISS_LOG_FALLBACK)
-        with open(MISS_LOG_FALLBACK, "a", newline="") as f:
-            w = csv.writer(f)
-            if new:
-                w.writerow(MISS_LOG_HEADER)
-            w.writerow(row)
 
 
 @app.event("message")
@@ -139,35 +147,45 @@ def handle_message(event, say, client):
     if WATCHED_CHANNELS and event["channel"] not in WATCHED_CHANNELS:
         return
 
-    # Spec step 3: full text is the question; strip optional prefix/mention
-    question = re.sub(r"^(<@[A-Z0-9]+>|@healthie-help)\s*", "",
-                      event.get("text", "")).strip()
+    # Spec step 3: full text is the question; strip optional prefix/mention.
+    # A leading @healthie-help / bot mention means the user addressed us
+    # directly, so we always reply — even if only to say we have nothing.
+    raw = event.get("text", "")
+    mentioned = bool(MENTION_RE.match(raw))
+    question = MENTION_RE.sub("", raw).strip()
+    reply_ts = event.get("thread_ts", event["ts"])
     if len(question) < 10:          # too short to be a real question
+        if mentioned:
+            say(text=ASK_A_QUESTION_REPLY, thread_ts=reply_ts)
         return
 
     try:
         urls = search_help_center(question)
         articles = [a for a in (fetch_article(u) for u in urls) if a["text"]]
-        if not articles:
-            log_miss(event["channel"], event["user"], question, "no_search_results")
-            return
-        docs = build_docs(articles)
 
-        # Spec step 5: strict confidence gate — silence unless direct match
-        ok, reason = gate(question, docs)
+        # Spec step 5: strict confidence gate — silence unless direct match,
+        # except when mentioned: then decline politely instead of silently.
+        if not articles:
+            ok, reason = False, "no_search_results"
+        else:
+            docs = build_docs(articles)
+            ok, reason = gate(question, docs)
         if not ok:
             log_miss(event["channel"], event["user"], question,
-                     f"gate_skip: {reason}")
+                     f"gate_skip: {reason}" if articles else reason)
+            if mentioned:
+                say(text=NO_ANSWER_REPLY, thread_ts=reply_ts)
             return
 
         # Spec step 6: threaded reply with help doc link
-        say(text=answer(question, docs),
-            thread_ts=event.get("thread_ts", event["ts"]))
+        say(text=answer(question, docs), thread_ts=reply_ts)
         log_miss(event["channel"], event["user"], question, "answered")
     except Exception as e:
-        # Spec step 7 spirit: never post errors into customer channels
+        # Spec step 7 spirit: never post raw errors into customer channels
         log_miss(event.get("channel", "?"), event.get("user", "?"),
                  question, f"error:{type(e).__name__}")
+        if mentioned:
+            say(text=ERROR_REPLY, thread_ts=reply_ts)
 
 
 if __name__ == "__main__":
