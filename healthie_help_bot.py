@@ -79,10 +79,13 @@ GATE_PROMPT = """You are a strict relevance gate for a customer support bot.
 Decide whether the help center articles below DIRECTLY and COMPLETELY answer the
 customer's question.
 
-Reply ANSWER only if a single article explicitly addresses the exact question asked.
+Reply ANSWER only if the articles explicitly and directly address the exact
+question asked — one article alone, or a few articles that each directly cover
+part of the question.
 Reply SKIP if:
 - The articles are merely related or adjacent to the topic
-- Answering would require inference, combining fragments, or general knowledge
+- Answering would require inference, piecing together loose fragments, or
+  general knowledge beyond what the articles state
 - The message is not actually a support question (greeting, internal chatter,
   opinion, feedback, sales/pricing negotiation, account-specific issue)
 - The question involves custom pricing, contracts, PHI, or account data
@@ -98,7 +101,10 @@ Style rules:
 - No exclamation points. Minimal contractions. Direct and straightforward.
 - Plain text with line breaks only. No markdown headers, no bold, no bullets
   unless listing 3+ items.
-- End with the help doc link on its own line, formatted as <URL|Article Title>."""
+- End with the help doc links that directly support your answer, each on its
+  own line, formatted as <URL|Article Title>. Usually this is 1 link; include
+  2 or 3 only when each is highly relevant to the question on its own. Never
+  pad the list with merely related articles."""
 
 
 def extract_queries(question: str) -> list[str]:
