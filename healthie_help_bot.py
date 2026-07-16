@@ -25,6 +25,12 @@ MISS_LOG_SHEET_ID = os.environ.get(
 )
 MISS_LOG_HEADER = ["timestamp_utc", "channel", "user", "question", "reason"]
 
+MODES_SHEET_NAME = "channel_modes"
+MODES_HEADER = ["channel", "mode", "updated_utc", "updated_by"]
+MUTE_COMMANDS = {"mute", "pause", "stop", "quiet"}
+UNMUTE_COMMANDS = {"unmute", "resume", "start"}
+STATUS_COMMANDS = {"status", "mode"}
+
 MENTION_RE = re.compile(r"^(<@[A-Z0-9]+>|@healthie-help)\s*")
 
 NO_ANSWER_REPLY = (
@@ -40,6 +46,23 @@ ASK_A_QUESTION_REPLY = (
 ERROR_REPLY = (
     "I ran into a technical issue while looking that up. "
     "Please try again in a few minutes, or the team can follow up here."
+)
+MUTED_REPLY = (
+    "Understood. I will stop answering automatically in this channel.\n"
+    "Mention me with a question any time and I will still respond. "
+    "Say \"@healthie-help unmute\" to turn automatic answers back on."
+)
+UNMUTED_REPLY = (
+    "Automatic answers are back on for this channel.\n"
+    "Say \"@healthie-help mute\" any time to switch me to mention-only."
+)
+STATUS_MUTED_REPLY = (
+    "This channel is set to mention-only. I answer here only when mentioned.\n"
+    "Say \"@healthie-help unmute\" to turn automatic answers back on."
+)
+STATUS_AUTO_REPLY = (
+    "Automatic answers are on for this channel.\n"
+    "Say \"@healthie-help mute\" to switch me to mention-only."
 )
 
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
@@ -143,20 +166,78 @@ def answer(question: str, docs: str) -> str:
     return resp.content[0].text
 
 
+_spreadsheet = None
 _worksheet = None
+_modes_worksheet = None
+muted_channels = set()  # channels in mention-only mode; loaded from the Sheet
+
+
+def _book():
+    """Lazy-init the Google Spreadsheet handle."""
+    global _spreadsheet
+    if _spreadsheet is None:
+        creds = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
+        _spreadsheet = gspread.service_account_from_dict(creds).open_by_key(
+            MISS_LOG_SHEET_ID)
+    return _spreadsheet
 
 
 def _sheet():
-    """Lazy-init the Google Sheet worksheet; adds the header row on first use."""
+    """Miss-log worksheet (first tab); adds the header row on first use."""
     global _worksheet
     if _worksheet is None:
-        creds = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
-        ws = gspread.service_account_from_dict(creds).open_by_key(
-            MISS_LOG_SHEET_ID).sheet1
+        ws = _book().sheet1
         if not ws.get_values("A1:E1"):
             ws.append_row(MISS_LOG_HEADER, value_input_option="RAW")
         _worksheet = ws
     return _worksheet
+
+
+def _modes_sheet():
+    """channel_modes worksheet; created with a header on first use."""
+    global _modes_worksheet
+    if _modes_worksheet is None:
+        book = _book()
+        try:
+            ws = book.worksheet(MODES_SHEET_NAME)
+        except gspread.WorksheetNotFound:
+            ws = book.add_worksheet(MODES_SHEET_NAME, rows=100, cols=4)
+            ws.append_row(MODES_HEADER, value_input_option="RAW")
+        _modes_worksheet = ws
+    return _modes_worksheet
+
+
+def load_channel_modes():
+    """Populate muted_channels from the Sheet at startup."""
+    try:
+        for row in _modes_sheet().get_all_values()[1:]:
+            if len(row) >= 2 and row[1] == "muted":
+                muted_channels.add(row[0])
+        print(f"loaded channel modes: {len(muted_channels)} muted", flush=True)
+    except Exception as e:
+        print(f"could not load channel modes ({type(e).__name__}: {e}); "
+              "starting with all channels on auto", flush=True)
+
+
+def set_channel_mode(channel: str, muted: bool, user: str):
+    """Flip a channel between auto and mention-only; persist to the Sheet."""
+    if muted:
+        muted_channels.add(channel)
+    else:
+        muted_channels.discard(channel)
+    row = [channel, "muted" if muted else "auto",
+           datetime.now(timezone.utc).isoformat(), user]
+    try:
+        ws = _modes_sheet()
+        cell = ws.find(channel, in_column=1)
+        if cell:
+            ws.update(values=[row], range_name=f"A{cell.row}:D{cell.row}")
+        else:
+            ws.append_row(row, value_input_option="RAW")
+    except Exception as e:
+        # in-memory state still applies until the next restart
+        print(f"mode persist failed ({type(e).__name__}: {e}); row: {row}",
+              flush=True)
 
 
 def log_miss(channel: str, user: str, question: str, reason: str):
@@ -188,6 +269,28 @@ def handle_message(event, say, client):
     mentioned = bool(MENTION_RE.match(raw))
     question = MENTION_RE.sub("", raw).strip()
     reply_ts = event.get("thread_ts", event["ts"])
+
+    # Mode commands: "@healthie-help mute|unmute|status" — per channel
+    if mentioned:
+        command = question.lower().rstrip(".!")
+        if command in MUTE_COMMANDS:
+            set_channel_mode(event["channel"], True, event["user"])
+            say(text=MUTED_REPLY, thread_ts=reply_ts)
+            return
+        if command in UNMUTE_COMMANDS:
+            set_channel_mode(event["channel"], False, event["user"])
+            say(text=UNMUTED_REPLY, thread_ts=reply_ts)
+            return
+        if command in STATUS_COMMANDS:
+            muted = event["channel"] in muted_channels
+            say(text=STATUS_MUTED_REPLY if muted else STATUS_AUTO_REPLY,
+                thread_ts=reply_ts)
+            return
+
+    # Mention-only mode: stay silent for unmentioned messages in muted channels
+    if not mentioned and event["channel"] in muted_channels:
+        return
+
     if len(question) < 10:          # too short to be a real question
         if mentioned:
             say(text=ASK_A_QUESTION_REPLY, thread_ts=reply_ts)
@@ -223,4 +326,5 @@ def handle_message(event, say, client):
 
 
 if __name__ == "__main__":
+    load_channel_modes()
     SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()
