@@ -17,6 +17,9 @@ GATE_MODEL = "claude-haiku-4-5-20251001"   # cheap yes/no gate
 WATCHED_CHANNELS = set(
     c for c in os.environ.get("WATCHED_CHANNELS", "").split(",") if c
 )  # empty = all channels the bot is in
+IGNORED_CHANNELS = set(
+    c.strip() for c in os.environ.get("IGNORED_CHANNELS", "").split(",") if c.strip()
+)  # blocklist: never respond in these, even if the bot is a member
 MISS_LOG_SHEET_ID = os.environ.get(
     "MISS_LOG_SHEET_ID", "1vcNM8R0E0mfoxhfjRv9PkA-kRkutUOiKYP8vx6GQ6VA"
 )
@@ -143,6 +146,8 @@ def handle_message(event, say, client):
           f"text={event.get('text', '')[:60]!r}", flush=True)
     # Spec step 2: human senders only; also ignore edits/joins/thread broadcasts
     if event.get("bot_id") or event.get("subtype"):
+        return
+    if event["channel"] in IGNORED_CHANNELS:
         return
     if WATCHED_CHANNELS and event["channel"] not in WATCHED_CHANNELS:
         return

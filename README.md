@@ -7,7 +7,8 @@ Answers customer questions in Slack using only help.gethealthie.com.
     export SLACK_BOT_TOKEN=xoxb-...
     export SLACK_APP_TOKEN=xapp-...
     export ANTHROPIC_API_KEY=sk-ant-...
-    export WATCHED_CHANNELS=C0XXXXXXX   # comma-separated channel IDs; empty = all joined channels
+    export WATCHED_CHANNELS=C0XXXXXXX   # optional allowlist; empty/unset = all joined channels
+    export IGNORED_CHANNELS=C0YYYYYYY   # optional blocklist; always wins over membership/allowlist
     export GOOGLE_SERVICE_ACCOUNT_JSON='{...}'   # service account key JSON (miss log -> Google Sheets)
     python healthie_help_bot.py
 
