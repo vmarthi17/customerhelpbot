@@ -2,6 +2,7 @@ import json
 import os
 import re
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import gspread
 import requests
@@ -11,7 +12,8 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 HELP_BASE = "https://help.gethealthie.com"
-MAX_ARTICLES = 3
+MAX_ARTICLES = 3      # article bodies fetched and given to the gate/answer
+MAX_CANDIDATES = 10   # search hits considered by the title re-rank
 ANSWER_MODEL = "claude-sonnet-4-6"
 GATE_MODEL = "claude-haiku-4-5-20251001"   # cheap yes/no gate
 WATCHED_CHANNELS = set(
@@ -23,7 +25,10 @@ IGNORED_CHANNELS = set(
 MISS_LOG_SHEET_ID = os.environ.get(
     "MISS_LOG_SHEET_ID", "1vcNM8R0E0mfoxhfjRv9PkA-kRkutUOiKYP8vx6GQ6VA"
 )
-MISS_LOG_HEADER = ["timestamp_utc", "channel", "user", "question", "reason"]
+MISS_LOG_HEADER = ["timestamp_est", "channel", "user", "question", "reason",
+                   "feedback"]  # feedback column is human-edited; never written
+
+EASTERN = ZoneInfo("America/New_York")
 
 MODES_SHEET_NAME = "channel_modes"
 MODES_HEADER = ["channel", "mode", "updated_utc", "updated_by"]
@@ -77,12 +82,51 @@ def bot_mention() -> str:
             _bot_mention = "@Healthie Help Bot"
     return _bot_mention
 
+
+_channel_names: dict[str, str] = {}
+_user_names: dict[str, str] = {}
+
+
+def channel_name(channel_id: str) -> str:
+    """Human-readable channel name ("#support"), cached; falls back to the
+    raw ID if the lookup fails (e.g. missing channels:read scope)."""
+    if channel_id not in _channel_names:
+        try:
+            info = app.client.conversations_info(channel=channel_id)
+            _channel_names[channel_id] = f"#{info['channel']['name']}"
+        except Exception:
+            return channel_id
+    return _channel_names[channel_id]
+
+
+def user_name(user_id: str) -> str:
+    """Human-readable user name, cached; falls back to the raw ID if the
+    lookup fails (e.g. missing users:read scope)."""
+    if user_id not in _user_names:
+        try:
+            u = app.client.users_info(user=user_id)["user"]
+            name = u.get("profile", {}).get("display_name") or u.get(
+                "real_name") or u.get("name")
+            if not name:
+                return user_id
+            _user_names[user_id] = name
+        except Exception:
+            return user_id
+    return _user_names[user_id]
+
 QUERY_PROMPT = """You turn a customer support message into search queries for a
 help center search engine that matches keywords literally (filler words hurt it).
 
 Extract 1-3 short queries, 1-4 words each, focused on the product feature or
 noun being asked about. Drop greetings, politeness, and filler.
 Reply with one query per line and nothing else."""
+
+RERANK_PROMPT = """You pick the help center articles most likely to answer a
+customer support question, judging only by article titles.
+
+From the numbered list, reply with the numbers of up to 3 titles most relevant
+to the question, most relevant first, comma-separated (e.g. "4, 1"). Reply with
+numbers only."""
 
 GATE_PROMPT = """You are a strict relevance gate for a customer support bot.
 Decide whether the help center articles below DIRECTLY and COMPLETELY answer the
@@ -127,22 +171,61 @@ def extract_queries(question: str) -> list[str]:
     return lines[:3] or [question]
 
 
-def search_help_center(query: str) -> list[str]:
+def search_help_center(query: str) -> list[dict]:
+    """Search hits in the help center's own ranking order, as
+    {"url", "title"} dicts (title falls back to a humanized slug)."""
     r = requests.get(f"{HELP_BASE}/search", params={"query": query},
                      headers={"User-Agent": "HealthieHelpBot/2.0"}, timeout=10)
-    slugs = list(dict.fromkeys(re.findall(r'href="/article/([^"]+)"', r.text)))
-    return [f"{HELP_BASE}/article/{s}" for s in slugs]
+    soup = BeautifulSoup(r.text, "html.parser")
+    results = {}
+    for a in soup.select('a[href^="/article/"]'):
+        slug = a["href"].split("/article/", 1)[1]
+        url = f"{HELP_BASE}/article/{slug}"
+        if url not in results:
+            title = a.get_text(strip=True) or slug.split("-", 1)[-1].replace("-", " ")
+            results[url] = {"url": url, "title": title}
+    return list(results.values())
+
+
+def rerank(question: str, candidates: list[dict]) -> list[dict]:
+    """Cheap Haiku pass: pick the MAX_ARTICLES candidates whose titles best
+    match the question, so a good article buried by the help center's own
+    ranking still gets fetched. Falls back to the top of the list as-is."""
+    titles = "\n".join(f"{i + 1}. {c['title']}" for i, c in enumerate(candidates))
+    try:
+        resp = claude.messages.create(
+            model=GATE_MODEL, max_tokens=30, temperature=0, system=RERANK_PROMPT,
+            messages=[{"role": "user",
+                       "content": f"QUESTION: {question}\n\nTITLES:\n{titles}"}],
+        )
+        picks = [int(n) for n in re.findall(r"\d+", resp.content[0].text)]
+        chosen = [candidates[n - 1] for n in picks if 1 <= n <= len(candidates)]
+        if chosen:
+            return chosen[:MAX_ARTICLES]
+    except Exception as e:
+        print(f"rerank failed ({type(e).__name__}: {e}); using search order",
+              flush=True)
+    return candidates[:MAX_ARTICLES]
 
 
 def search_articles(question: str) -> list[str]:
-    """Search once per extracted keyword query; merge, dedupe, cap.
+    """Search once per extracted keyword query; merge, dedupe, cap at
+    MAX_CANDIDATES, then re-rank by title down to MAX_ARTICLES.
     Falls back to the raw message if the keyword queries find nothing."""
-    urls = []
+    hits = []
     for q in extract_queries(question):
-        urls.extend(search_help_center(q))
-    if not urls:
-        urls = search_help_center(question)
-    return list(dict.fromkeys(urls))[:MAX_ARTICLES]
+        hits.extend(search_help_center(q))
+    if not hits:
+        hits = search_help_center(question)
+    seen, candidates = set(), []
+    for h in hits:
+        if h["url"] not in seen:
+            seen.add(h["url"])
+            candidates.append(h)
+    candidates = candidates[:MAX_CANDIDATES]
+    if len(candidates) > MAX_ARTICLES:
+        candidates = rerank(question, candidates)
+    return [c["url"] for c in candidates[:MAX_ARTICLES]]
 
 
 def fetch_article(url: str) -> dict:
@@ -202,7 +285,7 @@ def _sheet():
     global _worksheet
     if _worksheet is None:
         ws = _book().sheet1
-        if not ws.get_values("A1:E1"):
+        if not ws.get_values("A1:F1"):
             ws.append_row(MISS_LOG_HEADER, value_input_option="RAW")
         _worksheet = ws
     return _worksheet
@@ -255,10 +338,23 @@ def set_channel_mode(channel: str, muted: bool, user: str):
               flush=True)
 
 
+def _now_eastern() -> str:
+    """Eastern-time timestamp in a format Sheets parses as a native datetime."""
+    return datetime.now(EASTERN).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _sheet_text(value: str) -> str:
+    """Keep user text literal under USER_ENTERED: a leading ' stops Sheets
+    from parsing it as a formula (=, +, -) or mention (@)."""
+    return f"'{value}" if value[:1] in ("=", "+", "-", "@") else value
+
+
 def log_miss(channel: str, user: str, question: str, reason: str):
-    row = [datetime.now(timezone.utc).isoformat(), channel, user, question, reason]
+    row = [_now_eastern(), channel_name(channel), user_name(user),
+           _sheet_text(question), reason]
     try:
-        _sheet().append_row(row, value_input_option="RAW")
+        # USER_ENTERED so the timestamp lands as a real datetime cell
+        _sheet().append_row(row, value_input_option="USER_ENTERED")
     except Exception as e:
         print(f"sheet log failed ({type(e).__name__}: {e}); dropped row: {row}",
               flush=True)

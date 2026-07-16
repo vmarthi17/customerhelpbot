@@ -120,7 +120,7 @@ The bot authenticates with the `ANTHROPIC_API_KEY` set in Railway (manage or
 rotate it in the Anthropic Console; it appears nowhere in this repo). Two
 models per answered question:
 - **claude-haiku-4-5** ($1/$5 per MTok) â€” turns the question into search
-  keywords, and runs the strict relevance gate
+  keywords, re-ranks search hits by title, and runs the strict relevance gate
 - **claude-sonnet-4-6** ($3/$15 per MTok) â€” writes the customer-facing answer
 
 Typical cost: ~$0.004 per skipped question, ~$0.02 per answered question â€”

@@ -3,3 +3,4 @@ anthropic>=0.40
 beautifulsoup4>=4.12
 requests>=2.31
 gspread>=6.0
+tzdata>=2024.1
