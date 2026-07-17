@@ -22,9 +22,11 @@ the article text, and a strict relevance check runs before every reply.
   if an article directly answers the question. Otherwise it stays silent.
 - **Direct mention:** start a message with `@Healthie Help Bot` followed by an
   actual question and the bot always replies â€” with the answer if it has
-  one, or a polite "I don't have an article for that" pointing to the Help
-  Center. Mentions work even in muted channels. A bare mention (or mention
-  with no real question) gets no response.
+  one; with links to the closest related articles (stating explicitly that
+  they do not directly answer the exact question) when the docs are on-topic
+  but not a direct match; or a polite "I don't have an article for that"
+  pointing to the Help Center. Mentions work even in muted channels. A bare
+  mention (or mention with no real question) gets no response.
 - It ignores messages from other bots, message edits, join/leave events,
   and channels listed in the `IGNORED_CHANNELS` env var.
 
@@ -82,9 +84,11 @@ Everything lands in one Google Sheet:
 https://docs.google.com/spreadsheets/d/1vcNM8R0E0mfoxhfjRv9PkA-kRkutUOiKYP8vx6GQ6VA/edit
 
 - **Tab 1 (miss log):** one row per processed question â€” timestamp, channel,
-  user, question text, and outcome (`answered`, `gate_skip` with the reason,
-  `no_search_results`, or `error:<type>`). Gate skips are the content
-  backlog: questions customers asked that the Help Center can't answer yet.
+  user, question text, and outcome (`answered`, `related_links` when only
+  close-but-not-direct articles were offered, `gate_skip` with the reason,
+  `no_search_results`, or `error:<type>`). Gate skips and related-links rows
+  are the content backlog: questions customers asked that the Help Center
+  can't answer yet.
 - **`channel_modes` tab:** which channels are muted, when, and by whom.
 - If the Sheet is ever unreachable, rows are printed to the Railway service
   logs instead so nothing is lost silently.
