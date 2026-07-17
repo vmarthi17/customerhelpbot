@@ -45,6 +45,12 @@ NO_ANSWER_REPLY = (
     "You can also browse the help center here:\n"
     "<https://help.gethealthie.com|Healthie Help Center>"
 )
+RELATED_REPLY = (
+    "I do not have a help center article that directly answers this, "
+    "so I will leave it for the team rather than guess.\n"
+    "These are the closest related articles. Please note they cover the "
+    "same topic but do not directly answer your exact question:\n{links}"
+)
 ERROR_REPLY = (
     "I ran into a technical issue while looking that up. "
     "Please try again in a few minutes, or the team can follow up here."
@@ -135,22 +141,28 @@ From the numbered list, reply with the numbers of up to 3 titles most relevant
 to the question, most relevant first, comma-separated (e.g. "4, 1"). Reply with
 numbers only."""
 
-GATE_PROMPT = """You are a strict relevance gate for a customer support bot.
-Decide whether the help center articles below DIRECTLY and COMPLETELY answer the
-customer's question.
+GATE_PROMPT = """You are the relevance gate for a customer support bot. Work
+through these steps in order and reply with the first verdict that applies:
 
-Reply ANSWER only if the articles explicitly and directly address the exact
-question asked — one article alone, or a few articles that each directly cover
-part of the question.
-Reply SKIP if:
-- The articles are merely related or adjacent to the topic
-- Answering would require inference, piecing together loose fragments, or
-  general knowledge beyond what the articles state
-- The message is not actually a support question (greeting, internal chatter,
-  opinion, feedback, sales/pricing negotiation, account-specific issue)
-- The question involves custom pricing, contracts, PHI, or account data
+1. If the message is not a genuine customer support question about the product
+   (greeting, internal chatter, opinion, feedback, thanks, sales/pricing
+   negotiation, account-specific issue), or it involves custom pricing,
+   contracts, PHI, or account data: reply SKIP.
+2. If the articles explicitly and directly address the main thing being asked
+   — one article alone, or a few articles that each directly cover part of the
+   question: reply ANSWER. Reply ANSWER even when a minor detail is not
+   covered, as long as the core is; the answer will state plainly what the
+   docs do not cover. Never reply ANSWER when answering would require
+   inference, piecing together loose fragments, or knowledge beyond what the
+   articles state.
+3. If the articles cover the same feature or topic as the question but do not
+   directly answer the main thing being asked: reply RELATED. Questions asking
+   whether a capability exists, where the articles cover that feature area
+   without mentioning the capability, are RELATED.
+4. Otherwise: reply SKIP.
 
-Respond with one word - ANSWER or SKIP - followed by a one-line reason."""
+Respond with one word - ANSWER, RELATED, or SKIP - followed by a one-line
+reason."""
 
 STYLE_PROMPT = """You are Healthie Help, answering a customer question in Slack using
 ONLY the help center articles provided. Never invent information.
@@ -159,6 +171,11 @@ Style rules:
 - Professional but warm tone. Avoid jargon; use common words.
 - Short sentences, 15-20 words average. Active voice. Important info first.
 - No exclamation points. Minimal contractions. Direct and straightforward.
+- If a specific detail of the question is not covered by the articles, say so
+  plainly instead of guessing or leaving it out.
+- When the customer asks you to confirm something (a yes/no question), confirm
+  only what the articles explicitly state. If the articles do not explicitly
+  confirm it, do not say yes — say the help docs do not specify.
 - Plain text with line breaks only. No markdown headers, no bold, no bullets
   unless listing 3+ items.
 - End with the help doc links that directly support your answer, each on its
@@ -251,15 +268,19 @@ def build_docs(articles: list[dict]) -> str:
     )
 
 
-def gate(question: str, docs: str) -> tuple[bool, str]:
-    """Strict exact-match gate. Deterministic. Returns (verdict, one-line reason)."""
+def gate(question: str, docs: str) -> tuple[str, str]:
+    """Strict relevance gate. Deterministic. Returns (verdict, one-line
+    reason) where verdict is ANSWER, RELATED, or SKIP (the default when
+    the model's reply is unparseable)."""
     resp = claude.messages.create(
         model=GATE_MODEL, max_tokens=60, temperature=0, system=GATE_PROMPT,
         messages=[{"role": "user",
                    "content": f"ARTICLES:\n{docs}\n\nCUSTOMER QUESTION: {question}"}],
     )
     text = resp.content[0].text.strip()
-    return text.upper().startswith("ANSWER"), text
+    word = text.split()[0].strip(".:,-").upper() if text else ""
+    verdict = word if word in ("ANSWER", "RELATED") else "SKIP"
+    return verdict, text
 
 
 def answer(question: str, docs: str) -> str:
@@ -424,13 +445,20 @@ def handle_message(event, say, client):
         articles = [a for a in (fetch_article(u) for u in urls) if a["text"]]
 
         # Spec step 5: strict confidence gate — silence unless direct match,
-        # except when mentioned: then decline politely instead of silently.
+        # except when mentioned: then reply with related links (if the
+        # articles are at least on-topic) or a polite decline.
         if not articles:
-            ok, reason = False, "no_search_results"
+            verdict, reason = "SKIP", "no_search_results"
         else:
             docs = build_docs(articles)
-            ok, reason = gate(question, docs)
-        if not ok:
+            verdict, reason = gate(question, docs)
+        if verdict == "RELATED" and mentioned:
+            links = "\n".join(f"<{a['url']}|{a['title']}>" for a in articles)
+            say(text=RELATED_REPLY.format(links=links), thread_ts=reply_ts)
+            log_miss(event["channel"], event["user"], question,
+                     f"related_links: {reason}")
+            return
+        if verdict != "ANSWER":
             log_miss(event["channel"], event["user"], question,
                      f"gate_skip: {reason}" if articles else reason)
             if mentioned:
