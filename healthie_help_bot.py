@@ -136,14 +136,17 @@ to the question, most relevant first, comma-separated (e.g. "4, 1"). Reply with
 numbers only."""
 
 GATE_PROMPT = """You are a strict relevance gate for a customer support bot.
-Decide whether the help center articles below DIRECTLY and COMPLETELY answer the
+Decide whether the help center articles below directly address the core of the
 customer's question.
 
-Reply ANSWER only if the articles explicitly and directly address the exact
-question asked — one article alone, or a few articles that each directly cover
-part of the question.
+Reply ANSWER if the articles explicitly and directly address the main thing
+being asked — one article alone, or a few articles that each directly cover
+part of the question. Reply ANSWER even when a minor detail of the question is
+not covered, as long as the core is; the answer will state plainly what the
+docs do not cover.
 Reply SKIP if:
-- The articles are merely related or adjacent to the topic
+- The articles are merely related or adjacent to the topic, or do not address
+  the main thing being asked
 - Answering would require inference, piecing together loose fragments, or
   general knowledge beyond what the articles state
 - The message is not actually a support question (greeting, internal chatter,
@@ -159,6 +162,8 @@ Style rules:
 - Professional but warm tone. Avoid jargon; use common words.
 - Short sentences, 15-20 words average. Active voice. Important info first.
 - No exclamation points. Minimal contractions. Direct and straightforward.
+- If a specific detail of the question is not covered by the articles, say so
+  plainly instead of guessing or leaving it out.
 - Plain text with line breaks only. No markdown headers, no bold, no bullets
   unless listing 3+ items.
 - End with the help doc links that directly support your answer, each on its
